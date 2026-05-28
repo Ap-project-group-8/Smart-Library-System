@@ -1,0 +1,59 @@
+package threads;
+
+import db.LoanDAO;
+import network.NotificationServer;
+
+import java.sql.SQLException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Background thread that runs every 24 hours to:
+ *  1. Update loan statuses from ACTIVE → OVERDUE where due_date has passed.
+ *  2. Broadcast an overdue alert notification to all connected clients.
+ */
+public class OverdueCheckerThread {
+
+    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "OverdueChecker-Scheduler");
+        t.setDaemon(true);
+        return t;
+    });
+
+    private final LoanDAO loanDAO;
+    private final NotificationServer notificationServer;
+
+    public OverdueCheckerThread(NotificationServer notificationServer) {
+        this.loanDAO = new LoanDAO();
+        this.notificationServer = notificationServer;
+    }
+
+    /**
+     * Starts the scheduler — runs immediately, then every 24 hours.
+     */
+    public void start() {
+        scheduler.scheduleAtFixedRate(this::checkOverdueLoans, 0, 24, TimeUnit.HOURS);
+        System.out.println("[OverdueChecker] Scheduled to run every 24 hours.");
+    }
+
+    /**
+     * Stops the scheduler gracefully.
+     */
+    public void stop() {
+        scheduler.shutdownNow();
+    }
+
+    private void checkOverdueLoans() {
+        try {
+            int updated = loanDAO.updateOverdueStatuses();
+            System.out.println("[OverdueChecker] Updated " + updated + " loans to OVERDUE status.");
+            if (updated > 0 && notificationServer != null) {
+                notificationServer.broadcast("⚠ OVERDUE ALERT: " + updated +
+                        " loan(s) are now overdue. Please notify members.");
+            }
+        } catch (SQLException e) {
+            System.err.println("[OverdueChecker] Error checking overdue loans: " + e.getMessage());
+        }
+    }
+}

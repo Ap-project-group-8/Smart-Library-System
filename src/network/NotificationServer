@@ -1,0 +1,109 @@
+package network;
+
+import java.io.*;
+import java.net.*;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+/**
+ * Socket-based Notification Server.
+ * Broadcasts library events (book added, book returned, overdue alerts)
+ * to all connected clients using a thread-per-client model.
+ */
+public class NotificationServer {
+
+    public static final int PORT = 9090;
+
+    // Thread-safe set of all connected client output streams
+    private final Set<PrintWriter> clients = Collections.synchronizedSet(new HashSet<>());
+    private final ExecutorService threadPool = Executors.newCachedThreadPool();
+    private ServerSocket serverSocket;
+    private volatile boolean running = false;
+
+    /**
+     * Starts the server in a background thread.
+     */
+    public void start() {
+        running = true;
+        Thread serverThread = new Thread(() -> {
+            try {
+                serverSocket = new ServerSocket(PORT);
+                System.out.println("[Notification Server] Listening on port " + PORT);
+                while (running) {
+                    try {
+                        Socket clientSocket = serverSocket.accept();
+                        threadPool.submit(new ClientHandler(clientSocket));
+                    } catch (SocketException e) {
+                        if (running) System.err.println("[Notification Server] Accept error: " + e.getMessage());
+                    }
+                }
+            } catch (IOException e) {
+                System.err.println("[Notification Server] Could not start: " + e.getMessage());
+            }
+        }, "NotificationServer-Main");
+        serverThread.setDaemon(true);
+        serverThread.start();
+    }
+
+    /**
+     * Broadcasts a message to all connected clients.
+     */
+    public void broadcast(String message) {
+        String timestamped = "[" + java.time.LocalTime.now().withNano(0) + "] " + message;
+        System.out.println("[Notification Server] Broadcasting: " + timestamped);
+        synchronized (clients) {
+            for (PrintWriter writer : clients) {
+                writer.println(timestamped);
+                writer.flush();
+            }
+        }
+    }
+
+    public void stop() {
+        running = false;
+        try {
+            if (serverSocket != null) serverSocket.close();
+        } catch (IOException e) {
+            System.err.println("[Notification Server] Error stopping: " + e.getMessage());
+        }
+        threadPool.shutdownNow();
+    }
+
+    public int getClientCount() { return clients.size(); }
+
+    // ── Inner class: handles one connected client ──────────────────────────────
+
+    private class ClientHandler implements Runnable {
+        private final Socket socket;
+
+        ClientHandler(Socket socket) { this.socket = socket; }
+
+        @Override
+        public void run() {
+            PrintWriter out = null;
+            try {
+                out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream()), true);
+                clients.add(out);
+                System.out.println("[Notification Server] Client connected: " + socket.getInetAddress());
+                out.println("Connected to Smart Library Notification Server");
+                out.flush();
+
+                // Keep connection alive — read any incoming messages (heartbeat)
+                BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                String line;
+                while ((line = in.readLine()) != null) {
+                    // Echo back or handle client messages if needed
+                    System.out.println("[Notification Server] Client says: " + line);
+                }
+            } catch (IOException e) {
+                System.out.println("[Notification Server] Client disconnected.");
+            } finally {
+                if (out != null) clients.remove(out);
+                try { socket.close(); } catch (IOException ignored) {}
+            }
+        }
+    }
+}

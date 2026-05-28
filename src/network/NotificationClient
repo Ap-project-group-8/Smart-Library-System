@@ -1,0 +1,69 @@
+package network;
+
+import java.io.*;
+import java.net.*;
+import java.util.function.Consumer;
+
+/**
+ * Socket-based Notification Client.
+ * Connects to the NotificationServer and listens for broadcast messages.
+ * Delivers messages to the GUI via a callback (Consumer<String>).
+ */
+public class NotificationClient {
+
+    private Socket socket;
+    private volatile boolean running = false;
+    private Consumer<String> messageHandler;
+
+    /**
+     * Sets the callback that will be invoked on the EDT when a message arrives.
+     */
+    public void setMessageHandler(Consumer<String> handler) {
+        this.messageHandler = handler;
+    }
+
+    /**
+     * Connects to the notification server and starts listening in a daemon thread.
+     */
+    public boolean connect() {
+        try {
+            socket = new Socket("localhost", NotificationServer.PORT);
+            running = true;
+            Thread listenerThread = new Thread(this::listenLoop, "NotificationClient-Listener");
+            listenerThread.setDaemon(true);
+            listenerThread.start();
+            System.out.println("[Notification Client] Connected to notification server.");
+            return true;
+        } catch (IOException e) {
+            System.err.println("[Notification Client] Could not connect: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private void listenLoop() {
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(socket.getInputStream()))) {
+            String line;
+            while (running && (line = reader.readLine()) != null) {
+                final String msg = line;
+                if (messageHandler != null) {
+                    // Deliver to GUI on the Event Dispatch Thread
+                    javax.swing.SwingUtilities.invokeLater(() -> messageHandler.accept(msg));
+                }
+            }
+        } catch (IOException e) {
+            if (running) System.err.println("[Notification Client] Connection lost: " + e.getMessage());
+        }
+    }
+
+    public void disconnect() {
+        running = false;
+        try {
+            if (socket != null) socket.close();
+        } catch (IOException ignored) {}
+    }
+
+    public boolean isConnected() {
+        return socket != null && socket.isConnected() && !socket.isClosed();
+    }
+}

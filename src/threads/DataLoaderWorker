@@ -1,0 +1,61 @@
+package threads;
+
+import javax.swing.*;
+import java.util.concurrent.Callable;
+import java.util.function.Consumer;
+
+/**
+ * Generic SwingWorker wrapper for loading data in a background thread.
+ * Prevents GUI freezing during database operations.
+ * Shows a loading spinner while data is being fetched.
+ *
+ * @param <T> the type of data being loaded
+ */
+public class DataLoaderWorker<T> extends SwingWorker<T, Void> {
+
+    private final Callable<T>    dataLoader;    // runs on background thread
+    private final Consumer<T>    onSuccess;     // runs on EDT after success
+    private final Consumer<Exception> onError;  // runs on EDT after failure
+    private final JComponent     loadingTarget; // component to show spinner on
+
+    public DataLoaderWorker(Callable<T> dataLoader,
+                            Consumer<T> onSuccess,
+                            Consumer<Exception> onError,
+                            JComponent loadingTarget) {
+        this.dataLoader    = dataLoader;
+        this.onSuccess     = onSuccess;
+        this.onError       = onError;
+        this.loadingTarget = loadingTarget;
+    }
+
+    @Override
+    protected T doInBackground() throws Exception {
+        return dataLoader.call();
+    }
+
+    @Override
+    protected void done() {
+        // Hide spinner
+        if (loadingTarget != null) loadingTarget.setEnabled(true);
+        try {
+            T result = get();
+            if (onSuccess != null) onSuccess.accept(result);
+        } catch (Exception e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            if (onError != null) onError.accept(new Exception(cause));
+        }
+    }
+
+    /**
+     * Convenience factory — starts the worker immediately.
+     */
+    public static <T> DataLoaderWorker<T> execute(Callable<T> loader,
+                                                   Consumer<T> onSuccess,
+                                                   Consumer<Exception> onError,
+                                                   JComponent target) {
+        if (target != null) target.setEnabled(false);
+        DataLoaderWorker<T> worker = new DataLoaderWorker<>(loader, onSuccess, onError, target);
+        worker.execute();
+        return worker;
+    }
+}
